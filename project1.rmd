@@ -147,7 +147,6 @@ boxplot_weather
 
 
 
-```{r}
 #using POSIXct and cut to create hourly interval data like I did in eloadhrdf
 weatherdf$dates <- as.POSIXct(cut(as.POSIXct(weatherdf$dates), "hour"), tz="GMT")
 weatherdf_subset <- subset(weatherdf, select=c(dates, TEMP))
