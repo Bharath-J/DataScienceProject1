@@ -1,6 +1,8 @@
 ---
 title: "Project1"
 output: html_document
+author: Bharath Jagadish
+date: 1/25/2016
 ---
 ```{r}
 # write a function geteloaddatadf() - you will assign the return value to eloaddf
