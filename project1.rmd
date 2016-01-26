@@ -1,0 +1,228 @@
+---
+title: "Project1"
+output: html_document
+---
+```{r}
+# write a function geteloaddatadf() - you will assign the return value to eloaddf
+# in the function do the following
+# 1. load the electric load data from elecloaddata.xlsx
+# you are not allowed to convert to .csv. Find an appropriate R package that can read .xlsx files and load
+# the data in a dataframe called eloaddf. The columns should be dates, kwh, kwVAR
+#
+# some notes on the data
+# the file has 15 min interval data from 1/1/2014 to 12/30/2015
+# when you import the data, the first column of your dataset should be dates in POSIXct format
+# HINT: use the strptime and as.POSIX.ct functions to form the eloaddf$dates
+
+getloaddatadf <- function(){
+library("openxlsx")
+
+options(scipen=999)
+eloaddf <- read.xlsx("elecloaddata.xlsx",1)
+eloaddf$DATE <- ifelse(nchar(eloaddf$DATE)<6, paste0("0",eloaddf$DATE), paste0("",eloaddf$DATE))
+eloaddf$TIME <- eloaddf$TIME*100
+eloaddf$TIME <- ifelse(nchar(eloaddf$TIME)==5, paste0("0",eloaddf$TIME),
+                       ifelse(nchar(eloaddf$TIME)==4, paste0("00",eloaddf$TIME), paste0("",eloaddf$TIME)))
+eloaddf$DATES <- as.POSIXct(paste(eloaddf$DATE, eloaddf$TIME), format="%m%d%y %H%M%S", tz="GMT")                        
+
+eloaddf <- with(eloaddf, data.frame(dates=DATES, kwh=kWh, kwVAR=kVARh))
+return(eloaddf)
+}
+
+
+# write a function getweatherdf() - you will assign the #return value to weatherdf
+# 2. Next load the weather data from NOAA into a data frame weatherdf. The data is in 1874606932872dat.txt
+# This is 1 hour interval data for a specific weather station close to
+# the location of the site from which electric load data was obtained
+#
+# you need to use fixed width parsing to read the data into a data frame.
+# add a column called dates to the dataframe similar to #1 above
+
+getweatherdf <- function(){
+weatherdf <- read.fwf("1874606932872dat.txt", widths=c(7, 6, 13, 4, 4, 4, 4, 4, 2, 2, 2, 5, 
+                                                       3, 3, 3, 3, 3, 3, 3, 3, 2, 5, 5, 7, 6, 7, 
+                                                       4, 4, 6, 6, 6, 6, 2),header=FALSE, skip=1)
+
+colnames(weatherdf) <- c("USAF", "WBAN", "YRMODA_HRMN", "DIR", "SPD", "GUS", "CLG",
+                         "SKC", "L", "M", "H", "VSB", "MW1", "MW2", "MW3", "MW4", 
+                         "AW1", "AW2", "AW3", "AW4", "W", "TEMP", "DEWP", "SLP", 
+                         "ALT", "STP", "MAX", "MIN", "PCP01", "PCP06", "PCP24",
+                         "PCPXX", "SD")
+
+#adding trailing zeros to represent seconds
+weatherdf$YRMODA_HRMN <- weatherdf$YRMODA_HRMN*100
+weatherdf$YRMODA_HRMN <- as.character(weatherdf$YRMODA_HRMN)
+
+splitting YRMODA_HRMN into YRMODA (year-month-date) and HRMNSEC (hr-min-sec)
+weatherdf$YRMODA <- substring(weatherdf$YRMODA_HRMN, 1, 8)
+weatherdf$HRMISEC <- substring(weatherdf$YRMODA_HRMN, 9, 14)
+
+weatherdf$dates <- as.POSIXct(paste(weatherdf$YRMODA, weatherdf$HRMISEC), format="%Y%m%d %H%M%S", tz="GMT")
+weatherdf$TEMP <- as.numeric(as.character(weatherdf$TEMP))
+
+#deleting unwanted columns 
+weatherdf <- subset(weatherdf, select=-c(YRMODA_HRMN, YRMODA, HRMISEC))
+return(weatherdf)
+}
+
+# write a funcion getbillsdf() - you will assign the return value to billsdf
+# 3. Next load the bill data from billdata.xlsx
+# this data is monthly and carefully note the start and end date of each billing period. 
+# name the fields of the dataframe as
+# billdate, billstartdt, billenddt, kwh, mindemandkw, actualdemandkw, custcharge, 
+# distchrgkw, mttkwh, tbckwh,nugckwh, sbckwh, rggieekwh, deliverykwh, 
+# totdeliverychrg, supplychrg, totalchrg
+
+
+gebillsdf <- function(){
+billsdf <- read.xlsx("billdata.xlsx")
+
+#converting excel-style dates with origin=1899-12-30
+billsdf$Date<- with(billsdf, as.Date(Date, origin="1899-12-30"))
+billsdf$Billing.Start<- with(billsdf, as.Date(Billing.Start, origin="1899-12-30"))
+billsdf$Billing.End<- with(billsdf, as.Date(Billing.End, origin="1899-12-30"))
+
+#renaming column names
+colnames(billsdf) <- c("billdate", "billstartdt", "billenddt", "kwh", "mindemandkw", "actualdemandkw",
+                       "custcharge", "distchrgkw", "mttkwh", "tbckwh", "nugckwh",
+                       "sbckwh", "rggieekwh", "deliverykwh", "totaldeliverychrg",
+                       "supplychrg", "totalchrg")
+
+return(billsdf)
+}
+```
+We now have 3 data sets
+
+Electric load data in 15 min interval
+Weather data in 60 min interval
+Bill data monthly
+Lets do some simple analysis
+
+Display the monthly load profile
+```{r}
+#display a summary of the electric load data eloaddf$kwh by summarizing it by 
+#year, month and total kwh over each month
+#your answer should display 24 rows without the header.
+
+eload_summary <- with(eloaddf, aggregate(kwh, by=list(format(dates, "%Y    %m")), FUN=sum))
+colnames(eload_summary) <- c("Year Month", "Total kwh")
+
+# form a dataframe called eloadhrdf with two columns dates, kwh
+# this dataframe sums the 15min kwh in the eloaddf to hourly data
+eloadhrdf <- subset(eloaddf, select=-kwVAR)
+
+# using cut and POSIXct to divide dates into hourly intervals.
+# grouping top of the hour with the previous hour by
+# subtracting one second from each timestamp.
+eloadhrdf <- aggregate(eloadhrdf["kwh"], list(hour=cut(as.POSIXct(eloadhrdf$dates)-1,
+                                              "hour")), sum)
+colnames(eloadhrdf) <- c("dates", "kwh")
+
+# next create a plot frame with two panels side by side
+# On the left panel show a heat map of kwh data for 2014 with x-axis as months and y-axis as hour of the day (1 to 24). use subsetting of the data frame rather than copying the data into yet another data frame
+# On the right panel show a heat map of kwh data for 2015 with x-axis as months and y-axis as hour of the day (1 to 24). use subsetting of the data frame rather than copying the data into yet another data frame
+library(ggplot2)
+library(grid)
+eloadhrdf$dates = as.POSIXct(strptime(eloadhrdf$dates, "%Y-%m-%d %H:%M:%S"), tz = "GMT");
+
+heatmap_2014 <- ggplot(subset(eloadhrdf, format(eloadhrdf$dates, "%Y")=="2014"), aes(x = format(dates, "%m"), y = format(dates, "%H"), fill = kwh)) + geom_tile() + labs(x="Month", y="Hour of the Day", title="kwh for 2014")  
+heatmap_2015 <- ggplot(subset(eloadhrdf, format(eloadhrdf$dates, "%Y")=="2015"), aes(x = format(dates, "%m"), y = format(dates, "%H"), fill = kwh)) + geom_tile() + labs(x="Month", y="Hour of the Day", title="kwh for 2015")
+
+pushViewport(viewport(layout = grid.layout(1, 2)))
+print(heatmap_2014, vp = viewport(layout.pos.row = 1, layout.pos.col = 1))
+print(heatmap_2015, vp = viewport(layout.pos.row = 1, layout.pos.col = 2))
+```
+Energy consumption in 2014 and 2015 looks almost same even though kwh varies between 0 and 1200 in 2015. 
+In 2014, more energy is consumed in June, July, September and October than any other months ie., in the beginning of summer and fall. Least energy is consumed in November.
+In 2015, least energy is consumed during the months of January and February and most in July and August. 
+
+```{r}
+#plot the weather data. Use boxplots in ggplot2 with month on the x-axis and temperature in y-axis
+#remove asterisks from weatherdf 
+#boxplot
+boxplot_weather <- ggplot(weatherdf, aes(x = format(weatherdf$dates, "%m"), y = TEMP)) + geom_boxplot() + labs(x="Month",y="Temperature")
+boxplot_weather
+
+# create a dataframe with hourly interval data inside your # function by combining selective columns from eloadhrdf # #and weatherdf your dataframe should be called modeldatadf #and the columns should be dates, year, month, hrofday, #temp, kwh
+
+
+
+```{r}
+#using POSIXct and cut to create hourly interval data like I did in eloadhrdf
+weatherdf$dates <- as.POSIXct(cut(as.POSIXct(weatherdf$dates), "hour"), tz="GMT")
+weatherdf_subset <- subset(weatherdf, select=c(dates, TEMP))
+#merging eloadhrdf and weatherhrdf_subset
+modeldatadf <- merge(eloadhrdf, weatherdf_subset, "dates")
+modeldatadf$year <- as.factor(format(modeldatadf$dates, "%Y"))
+modeldatadf$month <- as.factor(format(modeldatadf$dates, "%m"))
+modeldatadf$hrofday <- as.factor(format(modeldatadf$dates, "%H"))
+modeldatadf <- modeldatadf[c("dates", "year", "month", "hrofday", "kwh", "TEMP")]
+
+# write a simple function called predmodel. the model object should be the return parameter
+# pass in the appropriate data frames.
+# 
+# you should fit a GLM with the following specification kwh ~ month + hrofday + temp
+# your model should only use 2014 data for your prediction model
+#
+# use the summary function and display the results of the function
+predmodel <- function(arg1){
+predict1 <- glm(kwh~month+hrofday+TEMP, family=gaussian,
+                data=arg1, subset=year==2014)
+return(predict)
+}
+modeldata_2014 <- predmodel(modeldatadf)
+summary(modeldata_2014)
+```
+In the month of March, kwh is least as it is the only month with negative coefficient
+From April to September, kwh seems to increase gradually but in October kwh
+shoots up and drops suddenly in November.
+Peak consumption hours are from 9AM to 7PM. It seems like the data is collected from an office building.
+
+```{r}
+# use the dataframe modeldatadf
+# split it into training and testing data sets based on 2014 data for training and 2015 data for testing
+# Use the GBM algorithm in the caret package in R to train and validate the model.
+# You have free reign to display and explain your results graphically
+#
+#
+
+library(gbm)
+
+train <- which(modeldatadf$year==2014)
+train <- modeldatadf[train, 3:6]
+#test <- subset(modeldatadf, year==2015)
+
+predict2 <- gbm(kwh~month+hrofday+TEMP, data=train, distribution="gaussian",
+                var.monotone=c(0,0,1), n.trees=3000, shrinkage=0.01, 
+                interaction.depth=3,
+                cv.folds=5, verbose=FALSE)
+best.iter <- gbm.perf(predict2, method="cv")
+summary(predict2)
+par(mfrow=c(1,3))
+plot(predict2, best.iter, i.var="hrofday")
+plot(predict2, best.iter, i.var="month")
+plot(predict2, best.iter, i.var="TEMP")
+
+# Lets now compare the predicted model for 2015 with the bill data kwh!
+  
+  #
+  # run your machine learning model and create a data frame of dates, kwh for 1hr interval data for 2015. note you
+  # may need to include the last few days of 2014 in your dataset due to the billing dates in January (see billdata.xlsx)
+  # call your data frame pred2015df.
+  # now for each of the 12 rows (billing periods) in the billsdf, sum the kwh for the date range in each of the rows from pred2015df for the corresponding start and end of billing in billsdf 
+  # create a resultsdf which has billdate, predkwh (from pred2015df), actualkwh (from billsdf)
+  # display the results
+
+pred2015df <- data.frame(subset(modeldatadf, modeldatadf$dates>=as.POSIXct("2014-12-20 0:00:00 GMT", 
+                                                                          "%Y-%m-%d %H:%M:%S", tz = "GMT")))
+
+resultsdf <- billsdf[,c("billdate", "kwh")]
+
+for (i in 1:12){
+  billsdf2 <- pred2015df[with(pred2015df, dates>=billsdf$billstartdt[i]
+                            & dates<=billsdf$billenddt[i]),] 
+  resultsdf$predkwh[i] <- sum(billsdf2$kwh)
+  }
+print(resultsdf)
+```
+This completes this little exploration of energy load data. Thank You!
